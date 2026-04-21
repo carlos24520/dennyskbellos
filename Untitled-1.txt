@@ -1,0 +1,221 @@
+<template>
+  <div class="booking-container">
+    <h2>Agendar Cita en DennysKbellos</h2>
+
+    <form @submit.prevent="enviarCita" v-if="!mostrarBotonPago">
+      <div class="form-group">
+        <label>¿Qué especialidad buscas?</label>
+        <select v-model="categoriaSeleccionada" required @change="limpiarServicios">
+          <option value="" disabled>Selecciona una categoría</option>
+          <option v-for="s in listaServicios" :key="s.id" :value="s.nombre">
+            {{ s.nombre }}
+          </option>
+        </select>
+      </div>
+
+      <div class="form-group" v-if="categoriaSeleccionada && serviciosDisponibles.length > 0">
+        <label>Tratamientos para {{ categoriaSeleccionada }}:</label>
+        <div class="sub-servicios-grid">
+          <div v-for="item in serviciosDisponibles" :key="item" class="checkbox-item">
+            <input type="checkbox" :id="item" :value="item" v-model="nuevaCita.serviciosDetalle" />
+            <label :for="item">{{ item }}</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Fono de contacto:</label>
+        <input v-model="nuevaCita.phone" type="tel" placeholder="+569..." required />
+      </div>
+
+      <div class="form-group">
+        <label>Selecciona la Fecha:</label>
+        <div v-if="mensajeDiaLleno" class="aviso-lleno">{{ mensajeDiaLleno }}</div>
+        <VDatePicker v-model="fechaSeleccionada" :min-date="new Date()" :attributes="atributosCalendario"
+          @dayclick="onDiaSeleccionado" mode="date" expanded transparent borderless />
+      </div>
+
+      <div v-if="nuevaCita.fecha && !mensajeDiaLleno" class="form-group">
+        <label>Hora para el {{ nuevaCita.fecha }}:</label>
+        <div class="horas-grid">
+          <button type="button" v-for="h in bloquesHorarios" :key="h"
+            :class="['hora-btn', { 'seleccionada': nuevaCita.hora === h }]" :disabled="estaOcupada(nuevaCita.fecha, h)"
+            @click="nuevaCita.hora = h">
+            {{ h }}
+          </button>
+        </div>
+      </div>
+
+      <div class="footer-form">
+        <button type="submit" class="btn-enviar" :disabled="!formularioListo">
+          Confirmar Reserva ✨
+        </button>
+      </div>
+    </form>
+
+    <div v-if="mostrarBotonPago" class="pago-container">
+      <p class="pago-instruccion">¡Cita reservada! Para asegurar tu cupo, realiza el pago ahora:</p>
+      <button type="button" @click="mostrarPopupPago = true" class="btn-pago">
+        Pagar con Transferencia 💳
+      </button>
+    </div>
+
+    <div v-if="mostrarPopupPago" class="popup-overlay">
+      <div class="popup">
+        <h3>💳 Datos para Transferencia</h3>
+        <div class="datos">
+          <p><strong>Nombre:</strong> {{ datosTransferencia.nombre }}</p>
+          <p><strong>RUT:</strong> {{ datosTransferencia.rut }}</p>
+          <p><strong>Tipo:</strong> {{ datosTransferencia.tipoCuenta }}</p>
+          <p><strong>N° Cuenta:</strong> {{ datosTransferencia.numeroCuenta }}</p>
+          <p><strong>Banco:</strong> {{ datosTransferencia.banco }}</p>
+          <p><strong>Correo:</strong> {{ datosTransferencia.correo }}</p>
+        </div>
+
+        <h4>🏦 Ir a tu banco:</h4>
+        <div class="bancos-grid-popup">
+          <a v-for="banco in bancosChile" :key="banco.nombre" :href="banco.url" target="_blank" class="btn-banco">
+            {{ banco.nombre }}
+          </a>
+        </div>
+
+        <button class="btn-cerrar" @click="mostrarPopupPago = false">Cerrar</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue';
+import { db } from '../firebase';
+import { collection, addDoc, getDocs } from "firebase/firestore";
+import { serviciosPeluqueria } from '../servicios.js';
+
+// Estados
+const mostrarBotonPago = ref(false);
+const mostrarPopupPago = ref(false);
+const listaServicios = ref(serviciosPeluqueria);
+const citasExistentes = ref([]);
+const mensajeDiaLleno = ref('');
+const fechaSeleccionada = ref(new Date());
+const categoriaSeleccionada = ref('');
+
+const datosTransferencia = {
+  nombre: "Dennys Mariangeles Castillo Duran",
+  rut: "26.618.593-6",
+  tipoCuenta: "Cuenta Corriente",
+  numeroCuenta: "000027750079",
+  banco: "Banco Santander",
+  correo: "DENNYSCASTILLO49@GMAIL.COM"
+};
+
+const nuevaCita = ref({
+  phone: '',
+  servicioPrincipal: '',
+  serviciosDetalle: [],
+  fecha: '',
+  hora: ''
+});
+
+const bancosChile = [
+  { nombre: 'Santander', url: 'https://www.santander.cl' },
+  { nombre: 'BancoEstado', url: 'https://www.bancoestado.cl' },
+  { nombre: 'Banco de Chile', url: 'https://www.bancochile.cl' },
+  { nombre: 'BCI', url: 'https://www.bci.cl' },
+  { nombre: 'Itaú', url: 'https://www.itau.cl' },
+  { nombre: 'Falabella', url: 'https://www.bancofalabella.cl' }
+];
+
+const formularioListo = computed(() => {
+  return (
+    categoriaSeleccionada.value !== '' &&
+    nuevaCita.value.serviciosDetalle.length > 0 &&
+    nuevaCita.value.phone.trim().length >= 8 && // Ajustado a 8 para ser más flexible
+    nuevaCita.value.fecha !== '' &&
+    nuevaCita.value.hora !== '' &&
+    mensajeDiaLleno.value === ''
+  );
+});
+
+const enviarCita = async () => {
+  try {
+    await addDoc(collection(db, "citas"), {
+      ...nuevaCita.value,
+      timestamp: new Date()
+    });
+    mostrarBotonPago.value = true;
+  } catch (e) {
+    console.error("Error:", e);
+    alert("Error al guardar la cita.");
+  }
+};
+
+const limpiarServicios = () => {
+  nuevaCita.value.serviciosDetalle = [];
+  nuevaCita.value.servicioPrincipal = categoriaSeleccionada.value;
+  nuevaCita.value.hora = '';
+};
+
+const serviciosDisponibles = computed(() => {
+  const cat = listaServicios.value.find(s => s.nombre === categoriaSeleccionada.value);
+  return cat ? cat.subservicios : [];
+});
+
+const atributosCalendario = computed(() => {
+  return citasExistentes.value.map(cita => ({
+    dot: 'pink',
+    dates: new Date(cita.fecha + 'T12:00:00')
+  }));
+});
+
+const onDiaSeleccionado = (day) => {
+  nuevaCita.value.fecha = day.id;
+  validarFechaSeleccionada();
+};
+
+const bloquesHorarios = ['09:00', '10:00', '11:00', '12:00', '15:00', '16:00', '17:00', '18:00'];
+
+const cargarCitas = async () => {
+  try {
+    const res = await getDocs(collection(db, "citas"));
+    citasExistentes.value = res.docs.map(doc => doc.data());
+  } catch (e) { console.error(e); }
+};
+
+const estaOcupada = (fecha, hora) => citasExistentes.value.some(c => c.fecha === fecha && c.hora === hora);
+
+const validarFechaSeleccionada = () => {
+  nuevaCita.value.hora = '';
+  const total = citasExistentes.value.filter(c => c.fecha === nuevaCita.value.fecha).length;
+  mensajeDiaLleno.value = total >= bloquesHorarios.length ? '❌ Día completo' : '';
+};
+
+onMounted(cargarCitas);
+</script>
+
+<style scoped>
+/* Estilos base */
+.booking-container { max-width: 600px; margin: 20px auto; padding: 30px; background: #fff; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+.form-group { margin-bottom: 20px; text-align: left; }
+label { display: block; font-weight: 600; color: #6d4c41; margin-bottom: 8px; }
+select, input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #ddd; box-sizing: border-box; }
+
+/* Grid de horas y servicios */
+.sub-servicios-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: #fff5f8; padding: 15px; border-radius: 12px; }
+.horas-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.hora-btn { padding: 10px; border: 1.5px solid #ff80ab; background: white; color: #ff80ab; border-radius: 8px; cursor: pointer; }
+.hora-btn.seleccionada { background: #ff80ab; color: white; }
+
+/* Botones */
+.btn-enviar { width: 100%; padding: 15px; background: #ff80ab; border: none; color: white; border-radius: 10px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+.btn-pago { width: 100%; background-color: #009ee3; color: white; border: none; padding: 15px; border-radius: 10px; font-weight: bold; cursor: pointer; }
+
+/* Popup */
+.popup-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.popup { background: white; padding: 30px; border-radius: 20px; width: 90%; max-width: 400px; text-align: center; }
+.datos { text-align: left; background: #f9f9f9; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+.datos p { margin: 5px 0; font-size: 0.9rem; }
+.bancos-grid-popup { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+.btn-banco { text-decoration: none; font-size: 0.8rem; padding: 8px; border: 1px solid #ddd; border-radius: 5px; color: #333; background: #fff; }
+.btn-cerrar { width: 100%; padding: 10px; background: #eee; border: none; border-radius: 8px; cursor: pointer; }
+</style>
